@@ -63,7 +63,10 @@ export function buildFinalResponse(
     case 'getCurrentTime': {
       const datetime = data?.datetime || '未知时间';
       const dayOfWeek = data?.dayOfWeek ? `（${data.dayOfWeek}）` : '';
-      content = `好的，现在是 ${datetime}${dayOfWeek}。`;
+      const now = new Date();
+      const hour = now.getHours();
+      const period = hour < 6 ? '夜深了，注意休息 🌙' : hour < 12 ? '上午好！☀️' : hour < 14 ? '中午好！☀️' : hour < 18 ? '下午好！🌤️' : '晚上好！🌙';
+      content = `${period} 现在是 ${datetime}${dayOfWeek}。需要我帮你安排今天的待办吗？`;
       break;
     }
 
@@ -71,6 +74,10 @@ export function buildFinalResponse(
       const expression = data?.expression || userInput;
       const result = data?.result ?? '计算失败';
       content = `好的，帮你算了一下：${expression} = ${result}`;
+      // 如果结果是整数且比较大的，给点实用建议
+      if (typeof result === 'number' && Number.isInteger(result) && result > 1000) {
+        content += `\n💡 需要我再算点别的吗？`;
+      }
       break;
     }
 
@@ -80,19 +87,40 @@ export function buildFinalResponse(
       if (!data?.hasDueDate) {
         content += '\n💡 需要为这个待办设置截止时间吗？比如"截止明天下午"。';
       }
+      // 如果已有截止日期，提醒一下
+      if (data?.dueDate) {
+        const dueMs = new Date(data.dueDate as string).getTime();
+        const nowMs = Date.now();
+        const daysLeft = Math.ceil((dueMs - nowMs) / (1000 * 60 * 60 * 24));
+        if (daysLeft <= 1) {
+          content += `\n⚠️ 截止日期很近，只剩 ${daysLeft} 天了，记得优先处理！`;
+        } else if (daysLeft <= 3) {
+          content += `\n📅 还有 ${daysLeft} 天到期，时间还算充裕。`;
+        }
+      }
       break;
     }
 
     case 'completeTodo': {
       content = `${transition()}${data?.summary || '已标记完成！'}`;
-      if (data?.remainingCount && (data.remainingCount as number) > 0) {
-        content += `\n你还有 ${data.remainingCount} 个待办未完成。`;
+      const remainingCount = data?.remainingCount as number | undefined;
+      const totalCount = data?.totalCount as number | undefined;
+      if (remainingCount !== undefined && remainingCount === 0 && totalCount && totalCount > 0) {
+        content += '\n🎉 太厉害了，所有待办都完成了！';
+      } else if (remainingCount !== undefined && remainingCount > 0) {
+        content += `\n你还有 ${remainingCount} 个待办未完成，继续加油 💪`;
       }
       break;
     }
 
     case 'deleteTodo': {
       content = `${transition()}${data?.summary || '待办已删除！'}`;
+      const remainingAfterDelete = data?.totalCount as number | undefined;
+      if (remainingAfterDelete !== undefined && remainingAfterDelete > 0) {
+        content += `\n还剩 ${remainingAfterDelete} 个待办。`;
+      } else if (remainingAfterDelete === 0) {
+        content += '\n现在没有待办事项了，清清爽爽！✨';
+      }
       break;
     }
 
@@ -101,24 +129,40 @@ export function buildFinalResponse(
       const count = data?.count as number || 0;
 
       if (!todos || count === 0) {
-        content = '你目前没有待办事项。\n💡 试试说"帮我创建待办：明天上午开会"，我来帮你记录。';
+        content = '你目前没有待办事项。\n💡 试试说"帮我建一个待办：明天上午开会"，我来帮你记录。';
         break;
       }
 
-      const priorityLabel: Record<string, string> = { high: '🔴高', medium: '🟡中', low: '🟢低' };
-      const list = todos
-        .map((t) => {
-          const checkbox = t.completed ? '☑' : '☐';
-          const prio = priorityLabel[t.priority as string] || '';
-          const due = t.dueDate ? ` 📅${t.dueDate}` : '';
-          return `${checkbox} ${t.title} ${prio}${due}`;
-        })
-        .join('\n');
+      const priorityLabel: Record<string, string> = { high: '🔴 高', medium: '🟡 中', low: '🟢 低' };
+      // 分离未完成/已完成，未完成的排前面
+      const pending = todos.filter((t) => !t.completed);
+      const done = todos.filter((t) => t.completed);
 
-      const pendingCount = todos.filter((t) => !t.completed).length;
+      let list = '';
+      if (pending.length > 0) {
+        list += '⏳ **进行中**\n';
+        list += pending
+          .map((t) => {
+            const prio = priorityLabel[t.priority as string] || '🟡 中';
+            const due = t.dueDate ? ` 📅${t.dueDate}` : '';
+            return `  ☐ ${t.title}  ${prio}${due}`;
+          })
+          .join('\n');
+      }
+      if (done.length > 0) {
+        if (list) list += '\n\n';
+        list += '✅ **已完成**\n';
+        list += done.map((t) => `  ☑ ${t.title}`).join('\n');
+      }
+
       content = `${transition()}你共有 ${count} 个待办：\n${list}`;
-      if (pendingCount > 0) {
-        content += `\n📌 还有 ${pendingCount} 个待完成，加油！`;
+      if (pending.length > 0) {
+        const urgent = pending.filter((t) => t.priority === 'high').length;
+        if (urgent > 0) {
+          content += `\n\n⚠️ 其中有 ${urgent} 个高优先级，建议优先完成！`;
+        } else {
+          content += `\n\n📌 还有 ${pending.length} 个待完成，加油！`;
+        }
       }
       break;
     }
@@ -126,17 +170,30 @@ export function buildFinalResponse(
     case 'queryEmployee': {
       const employees = data?.employees as Array<Record<string, string>> | undefined;
       const count = data?.count as number || 0;
+      const queryName = data?.queryName as string | undefined;
+      const queryDept = data?.queryDept as string | undefined;
 
       if (!employees || count === 0) {
-        content = '没有找到匹配的员工信息。';
+        content = '抱歉，没有找到匹配的员工信息。\n💡 试试查具体的人名（如"张三"）或部门名（如"技术部"）。';
         break;
       }
 
       const list = employees
-        .map((e) => `- ${e.name}（${e.department} · ${e.position}）📧 ${e.email}`)
+        .map((e) => {
+          const dept = e.department || '';
+          const pos = e.position || '';
+          const email = e.email || '';
+          return `- **${e.name}** · ${dept} · ${pos}\n  📧 ${email}`;
+        })
         .join('\n');
 
-      content = `${transition()}找到了 ${count} 位员工：\n${list}`;
+      if (count === 1 && queryName) {
+        content = `${transition()}找到了 ${queryName} 的信息：\n${list}`;
+      } else if (queryDept) {
+        content = `${transition()}${queryDept}共有 ${count} 位同事：\n${list}`;
+      } else {
+        content = `${transition()}找到了 ${count} 位员工：\n${list}`;
+      }
       break;
     }
 
@@ -286,10 +343,17 @@ function showHelp(): string {
 }
 
 function workTopic(text: string): string {
-  if (/周报/.test(text)) return '周报确实容易忘！需要我帮你创建一个"提交周报"的待办提醒吗？直接说"好的"就行～';
-  if (/开会|会议/.test(text)) return `需要我帮你记下会议待办吗？比如"创建待办：周五项目评审会，高优先级"`;
-  if (/加班/.test(text)) return '辛苦了！💪 需要我帮你记录今天的加班任务或者设置一个提醒吗？';
-  if (/上线|排期|deadline|ddl/i.test(text)) return '听起来很紧急！需要我帮你创建高优先级待办来跟踪进度吗？';
+  if (/周报/.test(text)) return '周报确实容易忘！需要我帮你创建一个"提交周报"的待办提醒吗？直接说"帮我建：提交周报"就行～';
+  if (/开会|会议/.test(text)) {
+    // 尝试提取时间信息
+    const timeMatch = text.match(/(?:明天|后天|今天|周[一二三四五六日]|\d+[点时]\d*[分]?|下午|上午|晚上)/g);
+    const timeHint = timeMatch ? timeMatch.join('') : '';
+    return timeHint
+      ? `需要我帮你记下会议待办吗？直接说"帮我建一个待办：${timeHint}开会"我就帮你创建 ✅`
+      : '需要我帮你记下会议待办吗？直接说"帮我建一个待办：开会"我就帮你创建 ✅';
+  }
+  if (/加班/.test(text)) return '辛苦了！💪 需要我帮你记录今天的加班任务吗？说"帮我记一下：加班"就行～';
+  if (/上线|排期|deadline|ddl/i.test(text)) return '听起来很紧急！需要我帮你创建高优先级待办来跟踪吗？直接说"帮我建待办：..."就可以～';
   return '工作的事情可以交给我一部分～ 需要帮你记待办、查时间还是算数据？';
 }
 

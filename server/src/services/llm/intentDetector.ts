@@ -25,7 +25,7 @@ export function detectIntent(input: string): Intent {
   // 1. 时间查询
   const timePatterns = [
     /现在几点|当前时间|几点了|现在时间|今天日期|今天几号|今天星期|现在是什么时候|查.*时间/,
-    /what time|current time|now/i,
+    /看[看下].*时间|给.*查.*时间|当前日期|什么时间|what time|current time|now/i,
   ];
   for (const p of timePatterns) {
     if (p.test(text)) {
@@ -48,27 +48,45 @@ export function detectIntent(input: string): Intent {
 
   // 3. 待办完成/删除（必须在创建之前，避免"完成 xx 待办"被创建匹配）
   if (/完成.*待办|标记.*完成|做完.*待办|待办.*完成|搞定.*待办|完成.*任务|完成\S{2,}/.test(text) ||
-      /(?:已完成|做完了|done)/i.test(text) && /待办|任务/.test(text)) {
-    const title = extractTitleAfterKeyword(text, /完成|标记|做完|搞定/);
-    // 守卫：标题过短（如"了""啦"）说明是日常用语，退回普通对话
+      /(?:已完成|做完了|done)/i.test(text) ||
+      /把.*完成了?|搞定了?|标记.*为.*完成|完[成工]了/.test(text)) {
+    const title = extractTitleAfterKeyword(text, /完成|标记|做完|搞定|把/);
     if (title && title.length >= 2) {
       return { type: 'complete_todo', title };
     }
   }
-  if (/删除.*待办|移除.*待办|删掉.*待办|取消.*待办|清除.*待办|删除.*任务|删除.*代码|删除.*提醒|删除\S{2,}/.test(text)) {
-    const title = extractTitleAfterKeyword(text, /删除|移除|删掉|取消|清除|删了/);
+  if (/删除.*待办|移除.*待办|删掉.*待办|取消.*待办|清除.*待办|删除.*任务|删除.*代码|删除.*提醒|删除\S{2,}/.test(text) ||
+      /把.*删了|不要.*待办|删了\S{2,}|删掉\S{2,}|去掉\S{2,}|移除\S{2,}|取消\S{2,}/.test(text)) {
+    const title = extractTitleAfterKeyword(text, /删除|移除|删掉|取消|清除|删了|去掉|把/);
     if (title && title.length >= 2) {
       return { type: 'delete_todo', title };
+    }
+  }
+
+  // 4. 待办查询（必须在创建之前，避免"给我看看待办"被创建误判）
+  const listTodoPatterns = [
+    /我有.*待办|我的待办|查看待办|待办列表|有哪些待办|查询待办|还有.*待办|显示待办|列出待办/,
+    /有什么.*任务|查看.*任务|任务列表/,
+    /看[看下].*待办|给我看.*待办|看看.*任务|还剩.*待办|还有.*没做|待办.*看看|待办.*在哪|待办呢/,
+  ];
+  for (const p of listTodoPatterns) {
+    if (p.test(text)) {
+      const status = /已完成|完成.*的/.test(text) ? 'completed' : /未完成|还没.*做/.test(text) ? 'pending' : undefined;
+      const priority = extractPriority(text);
+      return { type: 'list_todos', status, priority };
     }
   }
 
   // 疑问句守卫："可以...吗" "能不能..." 结尾带"吗"的句子是询问而非创建
   const looksLikeQuestion = /^(可以|能|能不能|可否|是否).*[吗？?]$/.test(text);
 
-  // 4. 待办创建
+  // 5. 待办创建
   const todoPatterns = [
     /创建待办|添加待办|帮我.*待办|帮我记|提醒我|创建一个?.*任务|新建.*任务/,
     /设置提醒|加个提醒|待办.*创建/,
+    // 更多自然语言表达（"给我写个待办"、"帮我建一个"、"记一下"等）
+    /给[我你].*待办|帮[我你].*待办|帮[我你].*创建|帮[我你].*建/,
+    /记一下|记录一下|帮我.*记录|写.*待办|写.*任务/,
   ];
   for (const p of todoPatterns) {
     if (p.test(text)) {
@@ -83,30 +101,50 @@ export function detectIntent(input: string): Intent {
     }
   }
 
-  // 5. 待办查询
-  const listTodoPatterns = [
-    /我有.*待办|我的待办|查看待办|待办列表|有哪些待办|查询待办|还有.*待办|显示待办|列出待办/,
-    /有什么.*任务|查看.*任务|任务列表/,
-  ];
-  for (const p of listTodoPatterns) {
-    if (p.test(text)) {
-      const status = /已完成|完成.*的/.test(text) ? 'completed' : /未完成|还没.*做/.test(text) ? 'pending' : undefined;
-      const priority = extractPriority(text);
-      return { type: 'list_todos', status, priority };
-    }
-  }
-
   // 6. 员工查询
-  const empPatterns = [
-    /查.*员工|员工.*查|谁.*部门|部门.*有谁|找.*同事|查询.*同事/,
+  // 高度可信模式：含人名、部门名、"我部门"等，直接触发
+  const empHighConf = [
     /技术部|产品部|设计部|市场部|人事部|财务部/,
     /张三|李四|王五|赵六|孙七|周八|吴九|郑十/,
+    /我[们咱]?部门|部门.*有[哪些什么]人|同事.*在哪|同事.*部门|同事.*信[息息]/,
+    /谁在.*部|谁.*部门/,
   ];
-  for (const p of empPatterns) {
+  // 宽带模式：需有人名或部门才触发
+  const empMidConf = [
+    /查.*员工|员工.*查|部门.*有谁|找.*同事|查询.*同事/,
+    /有[哪些什么]人在?.*部/,
+  ];
+  // 低置信模式：必须有具体人名/部门
+  const empLowConf = [
+    /查.*谁|帮我查|帮我找|给我查|给我找|查一下|查查|看看.*部/,
+  ];
+
+  // 先检查高置信
+  for (const p of empHighConf) {
     if (p.test(text)) {
       const name = extractEmployeeName(text);
       const department = extractDepartment(text);
       return { type: 'query_employee', name, department };
+    }
+  }
+  // 再检查中置信
+  for (const p of empMidConf) {
+    if (p.test(text)) {
+      const name = extractEmployeeName(text);
+      const department = extractDepartment(text);
+      if (name || department) {
+        return { type: 'query_employee', name, department };
+      }
+    }
+  }
+  // 最后检查低置信
+  for (const p of empLowConf) {
+    if (p.test(text)) {
+      const name = extractEmployeeName(text);
+      const department = extractDepartment(text);
+      if (name || department) {
+        return { type: 'query_employee', name, department };
+      }
     }
   }
 
@@ -145,8 +183,15 @@ export function extractTodoTitle(text: string): string {
     /待办[：:]?\s*(.+?)(?:[，,。.吗吧呢啊？?]|$)/,
     /提醒我\s*(.+?)(?:[，,。.吗吧呢啊？?]|$)/,
     /帮我记\s*(.+?)(?:[，,。.吗吧呢啊？?]|$)/,
+    /帮我.*记录\s*(.+?)(?:[，,。.吗吧呢啊？?]|$)/,
     /创建.*?任务[：:]?\s*(.+?)(?:[，,。.吗吧呢啊？?]|$)/,
     /添加待办[：:]?\s*(.+?)(?:[，,。.吗吧呢啊？?]|$)/,
+    // 自然语言表达："给我写一个待办xxx"、"帮我建一个xxx"
+    /给[我你].*待办\s*(.+?)(?:[，,。.吗吧呢啊？?]|$)/,
+    /帮[我你].*待办\s*(.+?)(?:[，,。.吗吧呢啊？?]|$)/,
+    /帮[我你].*[创建建]\s*(.+?)(?:[，,。.吗吧呢啊？?]|$)/,
+    /写.*待办\s*(.+?)(?:[，,。.吗吧呢啊？?]|$)/,
+    /(?:记一下|记录一下)\s*(.+?)(?:[，,。.吗吧呢啊？?]|$)/,
   ];
   for (const p of patterns) {
     const match = text.match(p);
@@ -162,8 +207,22 @@ export function extractTodoTitle(text: string): string {
     .trim() || '未命名待办';
 }
 
-/** 从关键词后提取标题（用于完成/删除操作） */
+/** 从关键词后提取标题（用于完成/删除操作），支持"把XX完成了"和"XX做完了"结构 */
 function extractTitleAfterKeyword(text: string, keywordPattern: RegExp): string | undefined {
+  // 特殊处理"把XX完成了/删了"结构
+  const baMatch = text.match(/把\s*(.+?)\s*(?:完成|做完|搞定|写完|删[除了]|去掉|移除)/);
+  if (baMatch) {
+    const title = baMatch[1]?.trim();
+    if (title && title.length >= 2) return title;
+  }
+
+  // 特殊处理"XX做完了/完成了"结构（关键词在标题后面）
+  const postMatch = text.match(/^(.+?)\s*(?:做完了|完成了|搞定了|已经完成|已做完)/);
+  if (postMatch) {
+    const title = postMatch[1]?.trim();
+    if (title && title.length >= 2 && !/^[吗吧呢啊哦呀]+$/.test(title)) return title;
+  }
+
   const match = text.match(new RegExp('(?:' + keywordPattern.source + ')[：:]*\s*(.+?)(?:[，,。.]|$)'));
   return match?.[1]?.trim() || undefined;
 }

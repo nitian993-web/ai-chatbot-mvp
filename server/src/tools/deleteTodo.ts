@@ -1,5 +1,5 @@
 import type { ToolDefinition, ToolResult } from '../types/index.js';
-import { deleteTodoByTitle } from './createTodo.js';
+import { deleteTodoByTitle, getTodoList } from './createTodo.js';
 
 export const deleteTodoTool: ToolDefinition = {
   name: 'deleteTodo',
@@ -23,6 +23,7 @@ export const deleteTodoTool: ToolDefinition = {
       data: {
         todo: { id: todo.id, title: todo.title },
         summary: `已删除待办"${todo.title}" 🗑️`,
+        totalCount: getTodoList().length,
       },
     };
   },

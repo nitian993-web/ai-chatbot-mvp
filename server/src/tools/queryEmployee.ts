@@ -53,6 +53,8 @@ export const queryEmployeeTool: ToolDefinition = {
       data: {
         count: results.length,
         employees: results,
+        queryName: (args.name as string) || undefined,
+        queryDept: (args.department as string) || undefined,
       },
     };
   },

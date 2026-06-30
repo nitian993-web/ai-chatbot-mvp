@@ -1,5 +1,5 @@
 import type { ToolDefinition, ToolResult } from '../types/index.js';
-import { completeTodoByTitle } from './createTodo.js';
+import { completeTodoByTitle, getTodoList } from './createTodo.js';
 
 export const completeTodoTool: ToolDefinition = {
   name: 'completeTodo',
@@ -23,6 +23,8 @@ export const completeTodoTool: ToolDefinition = {
       data: {
         todo: { id: todo.id, title: todo.title, priority: todo.priority, completed: todo.completed },
         summary: `已将"${todo.title}"标记为已完成 ✅`,
+        totalCount: getTodoList().length,
+        remainingCount: getTodoList().filter((t) => !t.completed).length,
       },
     };
   },

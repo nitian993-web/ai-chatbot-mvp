@@ -67,6 +67,8 @@ export const createTodoTool: ToolDefinition = {
         todo,
         summary: `已创建待办: "${title}"（优先级: ${priorityLabel[priority]}${dueDate ? `，截止: ${dueDate}` : ''}）`,
         totalCount: todoStore.length,
+        hasDueDate: !!dueDate,
+        dueDate: dueDate || undefined,
       },
     };
   },
